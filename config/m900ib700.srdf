@@ -21,4 +21,38 @@
     <disable_collisions link1="link_3" link2="link_4" reason="Adjacent" />
     <disable_collisions link1="link_4" link2="link_5" reason="Adjacent" />
     <disable_collisions link1="link_5" link2="link_6" reason="Adjacent" />
+
+    <disable_collisions link1="base_link" link2="link_2" reason="Never" />
+    <disable_collisions link1="base_link" link2="link_3" reason="Never" />
+    <disable_collisions link1="base_link" link2="balancer_left" reason="Adjacent" />
+    <disable_collisions link1="base_link" link2="balancer_right" reason="Adjacent" />
+    
+    <disable_collisions link1="link_1" link2="link_3" reason="Never" />
+    <disable_collisions link1="link_1" link2="piston_left" reason="Adjacent" />
+    <disable_collisions link1="link_1" link2="piston_right" reason="Adjacent" />
+    <disable_collisions link1="link_1" link2="balancer_left" reason="Default" />
+    <disable_collisions link1="link_1" link2="balancer_right" reason="Default" />
+    <disable_collisions link1="link_1" link2="plink_1" reason="Default" /> 
+
+    <disable_collisions link1="link_2" link2="link_4" reason="Never" />
+    <disable_collisions link1="link_2" link2="link_5" reason="Never" />
+    <disable_collisions link1="link_2" link2="link_6" reason="Never" />
+    <disable_collisions link1="link_2" link2="balancer_left" reason="Adjacent" />
+    <disable_collisions link1="link_2" link2="balancer_right" reason="Adjacent" />
+    <disable_collisions link1="link_2" link2="piston_left" reason="Default" />
+    <disable_collisions link1="link_2" link2="piston_right" reason="Default" />
+    <disable_collisions link1="link_2" link2="plink_1" reason="Adjacent" />
+    <disable_collisions link1="link_2" link2="plink_2" reason="Default" />
+
+    <disable_collisions link1="link_3" link2="link_5" reason="Never" />
+    <disable_collisions link1="link_3" link2="link_6" reason="Never" />
+    <disable_collisions link1="link_3" link2="piston_left" reason="Never" />
+    <disable_collisions link1="link_3" link2="piston_right" reason="Never" />
+    <disable_collisions link1="link_3" link2="plink_2" reason="Adjacent" />
+    <disable_collisions link1="link_3" link2="plink_1" reason="Default" />
+    
+    <disable_collisions link1="piston_left" link2="balancer_left" reason="Default" />
+    <disable_collisions link1="piston_right" link2="balancer_right" reason="Default" />
+    <disable_collisions link1="plink_1" link2="plink_2" reason="Default" />
+    <disable_collisions link1="plink_2" link2="link_2" reason="Default" />
 </robot>

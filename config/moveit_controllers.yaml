@@ -1,24 +1,19 @@
-controller_manager:
+move_group:
   ros__parameters:
-    update_rate: 100  # Hz
+    moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
 
-    joint_trajectory_controller:
-      type: joint_trajectory_controller/JointTrajectoryController
+    moveit_simple_controller_manager:
+      controller_names:
+        - joint_trajectory_controller
 
-    joint_state_broadcaster:
-      type: joint_state_broadcaster/JointStateBroadcaster
-
-joint_trajectory_controller:
-  ros__parameters:
-    joints:
-      - joint_1
-      - joint_2
-      - joint_3
-      - joint_4
-      - joint_5
-      - joint_6
-    command_interfaces:
-      - position
-    state_interfaces:
-      - position
-      - velocity
+      joint_trajectory_controller:
+        type: FollowJointTrajectory
+        action_ns: follow_joint_trajectory
+        default: true
+        joints:
+          - joint_1
+          - joint_2
+          - joint_3
+          - joint_4
+          - joint_5
+          - joint_6

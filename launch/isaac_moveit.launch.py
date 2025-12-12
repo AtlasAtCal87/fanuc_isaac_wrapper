@@ -29,20 +29,39 @@ def generate_launch_description():
     with open(srdf_file, 'r') as f:
         robot_description_semantic_content = f.read()
 
-    # 4. Load MoveIt Configs
+    # 4. Load Configurations
     robot_description = {'robot_description': robot_description_content}
     robot_description_semantic = {'robot_description_semantic': robot_description_semantic_content}
     
-    # Load Controllers
-    controllers_yaml = os.path.join(get_package_share_directory(pkg_name), 'config', 'moveit_controllers.yaml')
+    # --- UPDATED SECTION START ---
+    
+    # A. MoveIt Controllers Config (Planner Side)
+    # This file should ONLY contain the 'moveit_simple_controller_manager' stuff
+    moveit_controllers_yaml = os.path.join(get_package_share_directory(pkg_name), 'config', 'moveit_controllers.yaml')
+
+    # B. ROS 2 Control Config (Driver Side)
+    # This file should contain the 'controller_manager' and controller definitions
+    ros2_controllers_yaml = os.path.join(get_package_share_directory(pkg_name), 'config', 'ros2_controllers.yaml')
+
+    # --- UPDATED SECTION END ---
+
+    # Load Kinematics Configuration
+    kinematics_file = os.path.join(get_package_share_directory(pkg_name), 'config', 'kinematics.yaml')
+    try:
+        with open(kinematics_file, 'r') as f:
+            kinematics_config = yaml.safe_load(f)
+    except EnvironmentError:
+        print(f"WARNING: Could not load kinematics file: {kinematics_file}")
+        kinematics_config = {}
     
     # 5. Nodes
     
     # A. Controller Manager (The "Brain" of ROS 2 Control)
+    # CRITICAL CHANGE: Uses ros2_controllers_yaml now
     control_node = Node(
         package='controller_manager',
         executable='ros2_control_node',
-        parameters=[robot_description, controllers_yaml],
+        parameters=[robot_description, ros2_controllers_yaml],
         output='screen'
     )
 
@@ -51,7 +70,7 @@ def generate_launch_description():
         package='robot_state_publisher',
         executable='robot_state_publisher',
         output='screen',
-        parameters=[robot_description]
+        parameters=[robot_description, {'use_sim_time': True}]
     )
 
     # C. Spawners (Start the controllers automatically)
@@ -83,8 +102,10 @@ def generate_launch_description():
         parameters=[
             robot_description,
             robot_description_semantic,
+            kinematics_config,
             ompl_planning_pipeline_config,
-            {'use_sim_time': True} # Set to True if using Isaac Sim clock
+            moveit_controllers_yaml,            # <--- Uses the MoveIt specific YAML
+            {'use_sim_time': True}
         ]
     )
 
@@ -93,7 +114,12 @@ def generate_launch_description():
         package='rviz2',
         executable='rviz2',
         output='screen',
-        parameters=[robot_description, robot_description_semantic]
+        parameters=[
+            robot_description, 
+            robot_description_semantic,
+            kinematics_config, 
+            {'use_sim_time': True}            
+        ]
     )
 
     return LaunchDescription([
