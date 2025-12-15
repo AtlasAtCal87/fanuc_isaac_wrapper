@@ -25,7 +25,7 @@
       # Output goes to JointTrajectoryController *topic interface*
       # Per ros2_control docs: <controller_name>/joint_trajectory 
       command_out_type: "trajectory_msgs/JointTrajectory"
-      command_out_topic: "/joint_trajectory_controller/joint_trajectory"
+      command_out_topic: "/joint_trajectory"
 
       # Your controller is position-only, so publish joint positions
       publish_joint_positions: true
