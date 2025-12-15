@@ -1,29 +1,20 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
-from launch.actions import ExecuteProcess
 from ament_index_python.packages import get_package_share_directory
 import os
 import xacro
 import yaml
 
-def load_yaml(package_name, file_path):
-    package_path = get_package_share_directory(package_name)
-    absolute_file_path = os.path.join(package_path, file_path)
-    try:
-        with open(absolute_file_path, 'r') as file:
-            return yaml.safe_load(file)
-    except EnvironmentError:
-        return None
 
 def generate_launch_description():
     # 1. Define Paths
     pkg_name = 'fanuc_isaac_wrapper'
-    
+
     # 2. Process URDF (Xacro)
     xacro_file = os.path.join(get_package_share_directory(pkg_name), 'config', 'isaac_control.xacro')
     doc = xacro.process_file(xacro_file)
     robot_description_content = doc.toxml()
-    
+
     # 3. Process SRDF
     srdf_file = os.path.join(get_package_share_directory(pkg_name), 'config', 'm900ib700.srdf')
     with open(srdf_file, 'r') as f:
@@ -32,20 +23,18 @@ def generate_launch_description():
     # 4. Load Configurations
     robot_description = {'robot_description': robot_description_content}
     robot_description_semantic = {'robot_description_semantic': robot_description_semantic_content}
-    
-    # --- UPDATED SECTION START ---
-    
+
     # A. MoveIt Controllers Config (Planner Side)
-    # This file should ONLY contain the 'moveit_simple_controller_manager' stuff
-    moveit_controllers_yaml = os.path.join(get_package_share_directory(pkg_name), 'config', 'moveit_controllers.yaml')
+    moveit_controllers_yaml = os.path.join(
+        get_package_share_directory(pkg_name), 'config', 'moveit_controllers.yaml'
+    )
 
     # B. ROS 2 Control Config (Driver Side)
-    # This file should contain the 'controller_manager' and controller definitions
-    ros2_controllers_yaml = os.path.join(get_package_share_directory(pkg_name), 'config', 'ros2_controllers.yaml')
+    ros2_controllers_yaml = os.path.join(
+        get_package_share_directory(pkg_name), 'config', 'ros2_controllers.yaml'
+    )
 
-    # --- UPDATED SECTION END ---
-
-    # Load Kinematics Configuration
+    # 4.1 Load Kinematics Configuration
     kinematics_file = os.path.join(get_package_share_directory(pkg_name), 'config', 'kinematics.yaml')
     try:
         with open(kinematics_file, 'r') as f:
@@ -53,19 +42,24 @@ def generate_launch_description():
     except EnvironmentError:
         print(f"WARNING: Could not load kinematics file: {kinematics_file}")
         kinematics_config = {}
-    
+
+    # IMPORTANT: Servo expects kinematics under 'robot_description_kinematics'
+    robot_description_kinematics = {'robot_description_kinematics': kinematics_config}
+
+    # --- FIX: Use the Servo YAML file AS A PARAMETER FILE ---
+    servo_yaml_file = os.path.join(get_package_share_directory(pkg_name), 'config', 'servo.yaml')
+
     # 5. Nodes
-    
-    # A. Controller Manager (The "Brain" of ROS 2 Control)
-    # CRITICAL CHANGE: Uses ros2_controllers_yaml now
+
+    # A. Controller Manager (ROS 2 Control)
     control_node = Node(
         package='controller_manager',
         executable='ros2_control_node',
-        parameters=[robot_description, ros2_controllers_yaml],
+        parameters=[robot_description, ros2_controllers_yaml, {'use_sim_time': True}],
         output='screen'
     )
 
-    # B. Robot State Publisher (Publishes TF frames)
+    # B. Robot State Publisher (TF)
     rsp_node = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
@@ -73,7 +67,7 @@ def generate_launch_description():
         parameters=[robot_description, {'use_sim_time': True}]
     )
 
-    # C. Spawners (Start the controllers automatically)
+    # C. Spawners
     spawn_jsb = Node(
         package="controller_manager",
         executable="spawner",
@@ -86,15 +80,14 @@ def generate_launch_description():
         arguments=["joint_trajectory_controller", "--controller-manager", "/controller_manager"],
     )
 
-    # D. MoveGroup (MoveIt)
-    # Basic MoveIt configuration
+    # D. MoveGroup (MoveIt Planning)
     ompl_planning_pipeline_config = {
         'move_group': {
             'planning_plugin': 'ompl_interface/OMPLPlanner',
             'request_adapters': """default_planner_request_adapters/AddTimeOptimalParameterization default_planner_request_adapters/FixWorkspaceBounds default_planner_request_adapters/FixStartStateBounds default_planner_request_adapters/FixStartStateCollision default_planner_request_adapters/FixStartStatePathConstraints"""
         }
     }
-    
+
     move_group_node = Node(
         package='moveit_ros_move_group',
         executable='move_group',
@@ -102,9 +95,9 @@ def generate_launch_description():
         parameters=[
             robot_description,
             robot_description_semantic,
-            kinematics_config,
+            robot_description_kinematics,
             ompl_planning_pipeline_config,
-            moveit_controllers_yaml,            # <--- Uses the MoveIt specific YAML
+            moveit_controllers_yaml,
             {'use_sim_time': True}
         ]
     )
@@ -115,11 +108,35 @@ def generate_launch_description():
         executable='rviz2',
         output='screen',
         parameters=[
-            robot_description, 
+            robot_description,
             robot_description_semantic,
-            kinematics_config, 
-            {'use_sim_time': True}            
+            robot_description_kinematics,
+            {'use_sim_time': True}
         ]
+    )
+
+    # F. MoveIt Servo (standalone node)
+    servo_node = Node(
+        package='moveit_servo',
+        executable='servo_node_main',
+        name='servo_node',
+        output='screen',
+        parameters=[
+            servo_yaml_file,                # <-- THIS is the key fix
+            robot_description,
+            robot_description_semantic,
+            robot_description_kinematics,
+            {'use_sim_time': True},
+        ],
+    )
+
+    # G. Your PID node
+    pid_node = Node(
+        package=pkg_name,
+        executable='tcp_pid_servo.py',
+        name='tcp_pid_servo',
+        output='screen',
+        parameters=[{'use_sim_time': True}],
     )
 
     return LaunchDescription([
@@ -128,5 +145,7 @@ def generate_launch_description():
         spawn_jsb,
         spawn_traj,
         move_group_node,
-        rviz_node
+        rviz_node,
+        servo_node,
+        pid_node,
     ])
