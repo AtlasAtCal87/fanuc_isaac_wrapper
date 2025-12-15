@@ -1,73 +1,70 @@
-from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, RegisterEventHandler
-from launch.conditions import IfCondition
-from launch.event_handlers import OnProcessStart, OnProcessExit
-from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+#!/usr/bin/env python3
+"""
+fanuc_isaac_wrapper: Isaac Sim + ros2_control + MoveIt + Servo
+
+Control path:
+
+    PID node -> /servo_node/delta_twist_cmds (Twist)
+           Servo -> /joint_trajectory_controller/joint_trajectory (JointTrajectory)
+ joint_trajectory_controller (ros2_control) -> /joint_commands (JointState)
+        Isaac Sim ActionGraph subscribes /joint_commands -> drives articulation
+
+Feedback path:
+
+    Isaac Sim ActionGraph publishes /joint_states (+ /clock)
+    ros2_control hardware reads /joint_states
+    MoveIt + robot_state_publisher listen to /joint_states
+
+Important: We do NOT spawn joint_state_broadcaster because Isaac is already publishing /joint_states.
+"""
+
+import os
+import yaml
+import xacro
 
 from ament_index_python.packages import get_package_share_directory
-import os
-import xacro
-import yaml
+from launch import LaunchDescription
+from launch.actions import TimerAction, RegisterEventHandler
+from launch.event_handlers import OnProcessExit
+from launch_ros.actions import Node
+
+
+def load_file(pkg_name: str, relative_path: str) -> str:
+    pkg_path = get_package_share_directory(pkg_name)
+    abs_path = os.path.join(pkg_path, relative_path)
+    with open(abs_path, "r") as f:
+        return f.read()
+
+
+def load_yaml(pkg_name: str, relative_path: str):
+    pkg_path = get_package_share_directory(pkg_name)
+    abs_path = os.path.join(pkg_path, relative_path)
+    with open(abs_path, "r") as f:
+        return yaml.safe_load(f)
 
 
 def generate_launch_description():
-    pkg_name = "fanuc_isaac_wrapper"
-    pkg_share = get_package_share_directory(pkg_name)
+    pkg = "fanuc_isaac_wrapper"
 
-    # ---------------------------
-    # Launch args
-    # ---------------------------
-    start_pid_arg = DeclareLaunchArgument(
-        "start_pid",
-        default_value="false",
-        description="Start tcp_pid_servo node automatically (default: false).",
-    )
-    start_rviz_arg = DeclareLaunchArgument(
-        "start_rviz",
-        default_value="true",
-        description="Start RViz (default: true).",
-    )
+    # --- Robot description (URDF via xacro) ---
+    xacro_path = os.path.join(get_package_share_directory(pkg), "config", "isaac_control.xacro")
+    robot_description = {"robot_description": xacro.process_file(xacro_path).toxml()}
 
-    start_pid = LaunchConfiguration("start_pid")
-    start_rviz = LaunchConfiguration("start_rviz")
+    # --- Semantic description (SRDF) ---
+    robot_description_semantic = {"robot_description_semantic": load_file(pkg, "config/m900ib700.srdf")}
+
+    # --- Kinematics (MoveIt expects robot_description_kinematics) ---
+    kinematics_yaml = load_yaml(pkg, "config/kinematics.yaml")
+    robot_description_kinematics = {"robot_description_kinematics": kinematics_yaml}
+
+    # --- Parameter files ---
+    ros2_controllers_yaml = os.path.join(get_package_share_directory(pkg), "config", "ros2_controllers.yaml")
+    moveit_controllers_yaml = os.path.join(get_package_share_directory(pkg), "config", "moveit_controllers.yaml")
+    servo_yaml = os.path.join(get_package_share_directory(pkg), "config", "servo.yaml")
 
     use_sim_time = {"use_sim_time": True}
 
-    # ---------------------------
-    # Robot description (URDF/Xacro)
-    # ---------------------------
-    xacro_file = os.path.join(pkg_share, "config", "isaac_control.xacro")
-    robot_description_content = xacro.process_file(xacro_file).toxml()
-    robot_description = {"robot_description": robot_description_content}
-
-    # ---------------------------
-    # SRDF
-    # ---------------------------
-    srdf_file = os.path.join(pkg_share, "config", "m900ib700.srdf")
-    with open(srdf_file, "r") as f:
-        robot_description_semantic = {"robot_description_semantic": f.read()}
-
-    # ---------------------------
-    # Kinematics
-    # ---------------------------
-    kinematics_file = os.path.join(pkg_share, "config", "kinematics.yaml")
-    with open(kinematics_file, "r") as f:
-        kin_yaml = yaml.safe_load(f)
-    robot_description_kinematics = {"robot_description_kinematics": kin_yaml}
-
-    # ---------------------------
-    # YAML files
-    # ---------------------------
-    ros2_controllers_yaml = os.path.join(pkg_share, "config", "ros2_controllers.yaml")
-    moveit_controllers_yaml = os.path.join(pkg_share, "config", "moveit_controllers.yaml")
-    servo_yaml_file = os.path.join(pkg_share, "config", "servo.yaml")
-
-    # ---------------------------
-    # Nodes
-    # ---------------------------
-
-    # TF publisher
+    # 1) robot_state_publisher (also publishes /robot_description topic)
     rsp_node = Node(
         package="robot_state_publisher",
         executable="robot_state_publisher",
@@ -75,45 +72,42 @@ def generate_launch_description():
         parameters=[robot_description, use_sim_time],
     )
 
-    # ros2_control controller manager
-    # (Yes this still shows the "deprecated robot_description param" warning in some setups.
-    # It is not what is blocking you right now. Keeping it stable > chasing warnings.)
+    # 2) controller_manager (ros2_control_node)
+    # - do NOT pass robot_description parameter (deprecated)
+    # - controller_manager subscribes to /controller_manager/robot_description
+    # - robot_state_publisher publishes /robot_description
+    #   => we remap so it receives it.
     control_node = Node(
         package="controller_manager",
         executable="ros2_control_node",
         name="controller_manager",
         output="screen",
-        parameters=[robot_description, ros2_controllers_yaml, use_sim_time],
+        parameters=[ros2_controllers_yaml, use_sim_time],
+        remappings=[
+            ("/controller_manager/robot_description", "/robot_description"),
+        ],
     )
 
-    # Spawn ONLY the joint_trajectory_controller (exactly once)
-    # This is what CLAIMS joint_i/position.
-    spawn_jtc = Node(
+    # 3) Spawn ONLY the joint_trajectory_controller (this is what claims joint_*/position)
+    spawn_traj = Node(
         package="controller_manager",
         executable="spawner",
         output="screen",
         arguments=[
             "joint_trajectory_controller",
-            "--controller-manager", "/controller_manager",
-            "--controller-manager-timeout", "120",
-            "--service-call-timeout", "120",
+            "--controller-manager",
+            "/controller_manager",
+            "--controller-manager-timeout",
+            "120",
+            "--service-call-timeout",
+            "120",
         ],
     )
 
-    # MoveIt move_group (planner/execution)
-    ompl_planning_pipeline_config = {
-        "move_group": {
-            "planning_plugin": "ompl_interface/OMPLPlanner",
-            "request_adapters": (
-                "default_planner_request_adapters/AddTimeOptimalParameterization "
-                "default_planner_request_adapters/FixWorkspaceBounds "
-                "default_planner_request_adapters/FixStartStateBounds "
-                "default_planner_request_adapters/FixStartStateCollision "
-                "default_planner_request_adapters/FixStartStatePathConstraints"
-            ),
-        }
-    }
+    # Delay spawning so controller_manager has robot_description + IsaacSimSystem initialized.
+    delayed_spawn_traj = TimerAction(period=2.0, actions=[spawn_traj])
 
+    # 4) MoveIt + Servo + PID (start after the trajectory controller is active)
     move_group_node = Node(
         package="moveit_ros_move_group",
         executable="move_group",
@@ -122,13 +116,11 @@ def generate_launch_description():
             robot_description,
             robot_description_semantic,
             robot_description_kinematics,
-            ompl_planning_pipeline_config,
             moveit_controllers_yaml,
             use_sim_time,
         ],
     )
 
-    # MoveIt Servo (do NOT start until JTC is spawned/active)
     servo_node = Node(
         package="moveit_servo",
         executable="servo_node_main",
@@ -138,22 +130,19 @@ def generate_launch_description():
             robot_description,
             robot_description_semantic,
             robot_description_kinematics,
-            servo_yaml_file,   # <-- IMPORTANT: pass as param FILE
+            servo_yaml,
             use_sim_time,
         ],
     )
 
-    # Your PID node (optional; OFF by default so you can move out of singularity first)
-    pid_node = Node(
-        package=pkg_name,
+    tcp_pid_servo_node = Node(
+        package=pkg,
         executable="tcp_pid_servo.py",
         name="tcp_pid_servo",
         output="screen",
         parameters=[use_sim_time],
-        condition=IfCondition(start_pid),
     )
 
-    # RViz (optional)
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -164,39 +153,25 @@ def generate_launch_description():
             robot_description_kinematics,
             use_sim_time,
         ],
-        condition=IfCondition(start_rviz),
     )
 
-    # ---------------------------
-    # Event ordering (the key fix)
-    # ---------------------------
-
-    # Start spawner only after controller_manager starts
-    spawn_after_control = RegisterEventHandler(
-        OnProcessStart(
-            target_action=control_node,
-            on_start=[spawn_jtc],
-        )
-    )
-
-    # Start Servo only after spawner finished (meaning controller is loaded+configured+activated)
-    servo_after_jtc = RegisterEventHandler(
+    start_moveit_after_traj = RegisterEventHandler(
         OnProcessExit(
-            target_action=spawn_jtc,
-            on_exit=[servo_node, pid_node],
+            target_action=spawn_traj,
+            on_exit=[
+                move_group_node,
+                servo_node,
+                tcp_pid_servo_node,
+                rviz_node,
+            ],
         )
     )
 
-    return LaunchDescription([
-        start_pid_arg,
-        start_rviz_arg,
-
-        rsp_node,
-        control_node,
-        spawn_after_control,
-
-        move_group_node,
-        servo_after_jtc,
-
-        rviz_node,
-    ])
+    return LaunchDescription(
+        [
+            rsp_node,
+            control_node,
+            delayed_spawn_traj,
+            start_moveit_after_traj,
+        ]
+    )
